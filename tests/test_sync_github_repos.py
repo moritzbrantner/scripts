@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from sync_github_repos import (
@@ -102,6 +103,34 @@ class WorkspaceTests(unittest.TestCase):
 
             self.assertEqual(result.status, "blocked")
             self.assertEqual((target / "keep-me.txt").read_text(encoding="utf-8"), "do not overwrite")
+
+    def test_existing_symlink_is_blocked_without_following_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            outside = root / "outside"
+            subprocess.run(["git", "init", "-q", str(outside)], check=True)
+            (root / "demo").symlink_to(outside, target_is_directory=True)
+
+            with patch("sync_github_repos.run_command") as run_command:
+                result = sync_repository(
+                    self.repository,
+                    root,
+                    protocol="https",
+                    fetch=False,
+                    dry_run=False,
+                )
+
+            self.assertEqual(result.status, "blocked")
+            run_command.assert_not_called()
+
+
+class CommandTests(unittest.TestCase):
+    def test_timeout_becomes_a_normal_command_failure(self) -> None:
+        with patch("sync_github_repos.subprocess.run", side_effect=subprocess.TimeoutExpired(["git"], 30)):
+            result = __import__("sync_github_repos").run_command(["git"])
+
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("timed out", result.stderr)
 
 
 if __name__ == "__main__":
