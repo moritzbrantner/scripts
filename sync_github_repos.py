@@ -24,6 +24,7 @@ from typing import Iterable
 
 GITHUB_API = "https://api.github.com"
 GITHUB_HOST = "github.com"
+COMMAND_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +51,22 @@ class GitHubError(RuntimeError):
 
 
 def run_command(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        cwd=cwd,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        return subprocess.run(
+            command,
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            "",
+            f"command timed out after {COMMAND_TIMEOUT_SECONDS} seconds",
+        )
 
 
 def resolve_token() -> str | None:
@@ -237,8 +247,12 @@ def sync_repository(
     target = root / repository.name
 
     if target.exists():
-        if not target.is_dir():
-            return SyncResult(repository.full_name, "blocked", f"{target} exists and is not a directory")
+        if target.is_symlink() or not target.is_dir():
+            return SyncResult(
+                repository.full_name,
+                "blocked",
+                f"{target} exists and is not an ordinary directory",
+            )
 
         origin = run_command(["git", "-C", str(target), "remote", "get-url", "origin"])
         if origin.returncode != 0:
