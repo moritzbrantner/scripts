@@ -13,11 +13,17 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Compile
-        run: python -m compileall sync_github_repos.py tests
+        run: python -m compileall sync_github_repos.py repo_ops.py repo_ops_base.py repo_ops_checks.py repo_ops_analysis.py repo_ops_remote.py repo_ops_mutation.py tests
       - name: Test
         run: python -m unittest discover -s tests -v
+      - name: Smoke CLI aliases
+        run: |
+          bin/repo-ops --help
+          bin/fleet-status --help
+      - name: Dogfood workflow pinning
+        run: python -c "from pathlib import Path; import repo_ops as r; assert not r.workflow_findings(Path('.'))"
