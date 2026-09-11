@@ -59,10 +59,35 @@ For every discovered repository, the script follows this rule:
 
 A run exits non-zero if any repository is blocked or a Git operation fails.
 
+## Inventory workspace environments
+
+`workspace_environment_inventory.py` gives a read-only fleet view of the toolchain and environment state declared by sibling repositories. It treats ecosystem-native files such as `package.json#packageManager`, `rust-toolchain.toml`, `global.json`, `.node-version`, `.nvmrc`, and `.python-version` as version declarations, and reads environment-v1 compatibility holds from `.repository-environment.toml`.
+
+```bash
+python workspace_environment_inventory.py
+python workspace_environment_inventory.py --json
+```
+
+The report groups accepted versions across the workspace and flags exact accepted versions repeated in execution/setup files such as GitHub Actions workflows, repository scripts, dev-container files, and Dockerfiles. Repeated documentation text is retained in JSON for investigation but is not presented as a cleanup candidate by default.
+
+To compare the workspace with installed local tooling without changing anything:
+
+```bash
+python workspace_environment_inventory.py --local
+```
+
+`--local` reports the current Bun binary, installed exact rustup toolchains, and exact Rust toolchains that no scanned repository references. The command never uninstalls a toolchain, changes a repository pin, removes a cache, or rewrites a file.
+
+The default workspace is the parent of this repository. Override it when needed:
+
+```bash
+python workspace_environment_inventory.py --root ~/dev
+```
+
 ## Validation
 
 ```bash
-python -m compileall sync_github_repos.py tests
+python -m compileall sync_github_repos.py workspace_environment_inventory.py tests
 python -m unittest discover -s tests -v
 ```
 
