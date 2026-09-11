@@ -18,6 +18,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile
-        run: python -m compileall sync_github_repos.py tests
+        run: python -m compileall sync_github_repos.py workspace_environment_inventory.py tests
       - name: Test
         run: python -m unittest discover -s tests -v
