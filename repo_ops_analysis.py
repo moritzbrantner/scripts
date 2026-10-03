@@ -79,6 +79,7 @@ def cmd_dogfood(ts,a):
 def changed_paths(repo: Path,base=None):
     r=git(repo,"merge-base","HEAD",base or "origin/HEAD")
     if r.returncode and base: raise ValueError(f"cannot resolve requested base {base!r}: {r.stderr.strip()}")
+    if r.returncode: r=git(repo,"merge-base","HEAD",f"origin/{default_branch(repo)}")
     if r.returncode: r=git(repo,"rev-parse","HEAD~1")
     if r.returncode: return []
     d=git(repo,"diff","--name-only",f"{r.stdout.strip()}...HEAD"); return sorted(x for x in d.stdout.splitlines() if x)

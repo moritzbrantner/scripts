@@ -80,6 +80,27 @@ class Findings(unittest.TestCase):
             root=Path(d);p=make_repo(root,"a");(p/".gitignore").write_text("dist\n");run("git","add",".gitignore",cwd=p);run("git","commit","-m","ignore",cwd=p);(Path(ext)/"keep").write_text("x");(p/"dist").symlink_to(ext,target_is_directory=True)
             class A:apply=True;candidate=["dist"]
             out=r.cmd_clean([r.Target(p,"a")],A())[0];self.assertEqual(out.data["candidates"],["dist"]);self.assertFalse((p/"dist").exists());self.assertTrue((Path(ext)/"keep").exists())
+    def test_graph_declared_package_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a");b=make_repo(root,"widget-repo");c=make_repo(root,"react")
+            (b/"package.json").write_text(json.dumps({"name":"@org/widget"}));(c/"package.json").write_text(json.dumps({"name":"my-react-fork"}));(a/"package.json").write_text(json.dumps({"dependencies":{"@org/widget":"1","react":"18"}}))
+            g=r.graph_data([r.Target(a,"a"),r.Target(b,"widget-repo"),r.Target(c,"react")]);self.assertEqual(g["edges"],[{"from":"a","to":"widget-repo","kind":"npm:dependencies"}])
+    def test_changed_uses_default_branch_without_origin_head(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");run("git","update-ref","refs/remotes/origin/main","HEAD",cwd=p)
+            for n in ("x.py","y.ts"):(p/n).write_text("x\n");run("git","add",n,cwd=p);run("git","commit","-m",n,cwd=p)
+            self.assertEqual(r.changed_paths(p),["x.py","y.ts"])
+    def test_batch_resumes_remote_branch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);bare=root/"remote.git";run("git","init","--bare","-b","main",str(bare),cwd=root);p=make_repo(root,"a",str(bare));run("git","push","-u","origin","main",cwd=p)
+            run("git","switch","-c","ops",cwd=p);(p/"done").write_text("x\n");run("git","add","done",cwd=p);run("git","commit","-m","ops",cwd=p);run("git","push","origin","ops",cwd=p);run("git","switch","main",cwd=p);run("git","branch","-D","ops",cwd=p)
+            calls=[];orig=r.gh,r.gh_json
+            r.gh_json=lambda t,args,timeout=60:[];r.gh=lambda t,args,timeout=60:(calls.append(args),subprocess.CompletedProcess(args,0,"https://example/pr/1\n",""))[1]
+            try:
+                class A:apply=True;run="true";branch="ops";title="ops";body="b";timeout=30
+                out=r.cmd_batch([r.Target(p,"a","o/a")],A())[0]
+            finally: r.gh,r.gh_json=orig
+            self.assertEqual(out.status,"changed",out.dict());self.assertTrue(out.data["resumed"]);self.assertEqual(calls[0][:2],["pr","create"]);self.assertEqual(r.branch(p),"main")
     def test_remote_sha_required(self):
         self.assertIsNone(r.remote_sha({"status":"passed"}));self.assertEqual(r.remote_sha({"headSha":"a"*40}),"a"*40)
 

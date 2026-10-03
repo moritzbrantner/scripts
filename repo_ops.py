@@ -24,22 +24,36 @@ def cmd_batch(ts, a):
             continue
         created_branch = False
         try:
-            switched = git(t.path, "switch", "-c", a.branch, f"origin/{db}")
+            # Resume from a remote batch branch left by an earlier partial run (e.g. push succeeded, PR creation failed).
+            remote = git(t.path, "ls-remote", "--exit-code", "--heads", "origin", a.branch, timeout=90)
+            resumed = remote.returncode == 0
+            if resumed:
+                fetched = git(t.path, "fetch", "origin", f"+refs/heads/{a.branch}:refs/remotes/origin/{a.branch}", timeout=180)
+                if fetched.returncode:
+                    raise RuntimeError(fetched.stderr)
+            start = f"origin/{a.branch}" if resumed else f"origin/{db}"
+            switched = git(t.path, "switch", "-c", a.branch, start)
             if switched.returncode:
                 raise RuntimeError(switched.stderr)
             created_branch = True
             result = run(argv, cwd=t.path, timeout=a.timeout)
             if result.returncode:
                 raise RuntimeError((result.stderr or result.stdout)[-2000:])
-            if not git(t.path, "status", "--porcelain=v1").stdout.strip():
+            changed = bool(git(t.path, "status", "--porcelain=v1").stdout.strip())
+            if not changed and not resumed:
                 out.append(Outcome(t.display(), "clean", "command produced no changes"))
                 continue
-            for args in (("add", "-A"), ("commit", "-m", a.title), ("push", "-u", "origin", a.branch)):
-                result = git(t.path, *args, timeout=180)
-                if result.returncode:
-                    raise RuntimeError(result.stderr)
-            url = gh(t, ["pr", "create", "--title", a.title, "--body", a.body, "--base", db]).stdout.strip()
-            out.append(Outcome(t.display(), "changed", "batch PR created", data={"url": url}))
+            if changed:
+                for args in (("add", "-A"), ("commit", "-m", a.title), ("push", "-u", "origin", a.branch)):
+                    result = git(t.path, *args, timeout=180)
+                    if result.returncode:
+                        raise RuntimeError(result.stderr)
+            existing = gh_json(t, ["pr", "list", "--head", a.branch, "--state", "open", "--json", "url"]) if resumed else []
+            if existing:
+                out.append(Outcome(t.display(), "changed" if changed else "clean", "batch PR already open", data={"url": existing[0]["url"], "resumed": True}))
+                continue
+            url = gh(t, ["pr", "create", "--title", a.title, "--body", a.body, "--base", db, "--head", a.branch]).stdout.strip()
+            out.append(Outcome(t.display(), "changed", "batch PR created", data={"url": url, "resumed": resumed}))
         except Exception as e:
             out.append(Outcome(t.display(), "error", "batch PR failed", (finding(t, "batch-pr-failed", "error", str(e)),)))
         finally:

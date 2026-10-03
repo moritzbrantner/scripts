@@ -7,7 +7,9 @@ def cmd_ci_reproduce(ts,a):
     out=[]
     for t in ts:
         try:
-            runs=gh_json(t,["run","list","--limit","20","--json","databaseId,headSha,status,conclusion,workflowName,url"]); selected=next((x for x in runs if int(x["databaseId"])==a.run_id),None) if a.run_id else next((x for x in runs if x.get("conclusion") not in {None,"success","neutral","skipped"}),None)
+            fields="databaseId,headSha,status,conclusion,workflowName,url"
+            if a.run_id: selected=gh_json(t,["run","view",str(a.run_id),"--json",fields])
+            else: runs=gh_json(t,["run","list","--limit","20","--json",fields]); selected=next((x for x in runs if x.get("conclusion") not in {None,"success","neutral","skipped"}),None)
             if not selected: out.append(Outcome(t.display(),"clean","no failed workflow run found")); continue
             jobs=gh_json(t,["run","view",str(selected["databaseId"]),"--json","jobs"]).get("jobs",[]); failed=[]
             for job in jobs:
@@ -82,24 +84,32 @@ def cmd_release(ts,a):
         if not a.output_root: ensure_ignored(t.path,".artifacts")
         write_json(path,evidence); out.append(Outcome(t.display(),"failed" if val and val.status=="failed" else "written",f"release evidence written to {path}",val.findings if val else (),{"artifact":str(path)}))
     return out
+def package_names(ts):
+    """Map declared npm package names to repositories; the directory name is only a fallback for unnamed packages."""
+    names={}
+    for t in ts:
+        p=load_json(t.path/"package.json",{}) or {}
+        declared=p.get("name") if isinstance(p,dict) else None
+        names[declared if isinstance(declared,str) and declared else t.name]=t.display()
+    return names
 def graph_data(ts):
-    names={t.name:t.display() for t in ts}; edges=set()
+    names=package_names(ts); dirs={t.name:t.display() for t in ts}; edges=set()
     for t in ts:
         p=load_json(t.path/"package.json",{}) or {}
         if isinstance(p,dict):
             for sec in ("dependencies","devDependencies","peerDependencies"):
                 for name,val in (p.get(sec,{}) or {}).items():
-                    if name in names: edges.add((t.display(),names[name],f"npm:{sec}"))
+                    if name in names and names[name]!=t.display(): edges.add((t.display(),names[name],f"npm:{sec}"))
                     if isinstance(val,str) and val.startswith(("file:","link:")):
                         c=(t.path/val.split(":",1)[1]).resolve()
-                        if c.parent==t.path.parent and c.name in names: edges.add((t.display(),names[c.name],f"npm:{sec}:path"))
+                        if c.parent==t.path.parent and c.name in dirs: edges.add((t.display(),dirs[c.name],f"npm:{sec}:path"))
         cargo=t.path/"Cargo.toml"
         if cargo.exists():
             for m in re.finditer(r"(?:path|git)\s*=\s*\"([^\"]+)\"",cargo.read_text(encoding="utf-8",errors="replace")):
                 v=m.group(1)
                 if v.startswith("../"):
                     c=(t.path/v).resolve()
-                    if c.parent==t.path.parent and c.name in names: edges.add((t.display(),names[c.name],"cargo:path"))
+                    if c.parent==t.path.parent and c.name in dirs: edges.add((t.display(),dirs[c.name],"cargo:path"))
         w=t.path/".github"/"workflows"
         if w.exists():
             for f in w.glob("*.y*ml"):
