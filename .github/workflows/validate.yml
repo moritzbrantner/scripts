@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile
-        run: python -m compileall sync_github_repos.py repo_ops.py repo_ops_base.py repo_ops_checks.py repo_ops_analysis.py repo_ops_remote.py repo_ops_mutation.py tests
+        run: python -m compileall sync_github_repos.py workspace_environment_inventory.py repo_ops.py repo_ops_base.py repo_ops_checks.py repo_ops_analysis.py repo_ops_remote.py repo_ops_mutation.py tests
       - name: Test
         run: python -m unittest discover -s tests -v
       - name: Smoke CLI aliases

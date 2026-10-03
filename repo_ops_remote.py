@@ -78,7 +78,9 @@ def cmd_issue_from_finding(ts,a):
 def cmd_release(ts,a):
     out=[]
     for t in ts:
-        val=run_plan(t,health_plan(t.path,True),a.timeout) if a.run_validation else None; evidence={"schemaVersion":1,"generatedAt":dt.datetime.now(dt.timezone.utc).isoformat(),"repository":t.display(),"fingerprint":fingerprint(t),"validationPlan":health_plan(t.path,True),"validation":val.dict() if val else None}; base=a.output_root.expanduser().resolve() if a.output_root else t.path/".artifacts"/"repo-ops"/"release-evidence"; path=base/f"{t.name}-{head(t.path) or 'unknown'}.json" if a.output_root else base/f"{head(t.path) or 'unknown'}.json"; write_json(path,evidence); out.append(Outcome(t.display(),"failed" if val and val.status=="failed" else "written",f"release evidence written to {path}",val.findings if val else (),{"artifact":str(path)}))
+        val=run_plan(t,health_plan(t.path,True),a.timeout) if a.run_validation else None; evidence={"schemaVersion":1,"generatedAt":dt.datetime.now(dt.timezone.utc).isoformat(),"repository":t.display(),"fingerprint":fingerprint(t),"validationPlan":health_plan(t.path,True),"validation":val.dict() if val else None}; base=a.output_root.expanduser().resolve() if a.output_root else t.path/".artifacts"/"repo-ops"/"release-evidence"; path=base/f"{t.name}-{head(t.path) or 'unknown'}.json" if a.output_root else base/f"{head(t.path) or 'unknown'}.json"
+        if not a.output_root: ensure_ignored(t.path,".artifacts")
+        write_json(path,evidence); out.append(Outcome(t.display(),"failed" if val and val.status=="failed" else "written",f"release evidence written to {path}",val.findings if val else (),{"artifact":str(path)}))
     return out
 def graph_data(ts):
     names={t.name:t.display() for t in ts}; edges=set()

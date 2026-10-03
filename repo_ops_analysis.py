@@ -42,16 +42,26 @@ def cmd_pages_smoke(ts,a):
         if not cmd: out.append(Outcome(t.display(),"unavailable","no local Pages build/surface command discovered",data={"workflows":wf})); continue
         r=run(cmd,cwd=t.path,timeout=a.timeout); fs=() if not r.returncode else (finding(t,"pages-smoke-failed","error",f"Pages smoke exited {r.returncode}",detail=(r.stderr or r.stdout)[-4000:]),); out.append(Outcome(t.display(),"passed" if not r.returncode else "failed","Pages smoke passed" if not r.returncode else "Pages smoke failed",fs,{"command":cmd,"workflows":wf}))
     return out
+def remote_sha(payload):
+    """Revision the remote analysis reports it ran against; evidence without one is not trusted."""
+    if not isinstance(payload,dict): return None
+    for key in ("headSha","sha","commit","ref"):
+        v=payload.get(key)
+        if isinstance(v,str) and re.fullmatch(r"[0-9a-f]{40}",v): return v
+    return None
 def cmd_dogfood(ts,a):
     out=[]; browser=next((shutil.which(x) for x in ("chromium","chromium-browser","google-chrome","google-chrome-stable","msedge") if shutil.which(x)),None)
     for t in ts:
-        payload=None; source=None; notes=[]
-        if t.slug and browser:
-            url="https://moritzbrantner.github.io/coding-tooling/run.json/?"+urllib.parse.urlencode({"repo":t.slug,"argv":a.operation}); r=run([browser,"--headless=new","--disable-gpu","--no-sandbox","--virtual-time-budget=10000","--dump-dom",url],cwd=t.path,timeout=90)
+        payload=None; source=None; notes=[]; sha=head(t.path)
+        if t.slug and browser and sha:
+            url="https://moritzbrantner.github.io/coding-tooling/run.json/?"+urllib.parse.urlencode({"repo":t.slug,"ref":sha,"argv":a.operation}); r=run([browser,"--headless=new","--disable-gpu","--no-sandbox","--virtual-time-budget=10000","--dump-dom",url],cwd=t.path,timeout=90)
             if not r.returncode:
                 for m in re.finditer(r"<pre[^>]*>(.*?)</pre>",r.stdout,re.I|re.S):
-                    try: payload=json.loads(html.unescape(re.sub(r"<[^>]+>","",m.group(1))).strip()); source="coding-tooling-pages"; break
-                    except json.JSONDecodeError: pass
+                    try: candidate=json.loads(html.unescape(re.sub(r"<[^>]+>","",m.group(1))).strip())
+                    except json.JSONDecodeError: continue
+                    if remote_sha(candidate)==sha: payload=candidate; source="coding-tooling-pages"
+                    else: notes.append(f"Pages evidence analysed {remote_sha(candidate) or 'an unknown revision'}, not local HEAD {sha}; ignored")
+                    break
         if payload is None:
             ct=coding_tooling(t.path,shlex.split(a.operation))
             if ct:
@@ -62,12 +72,13 @@ def cmd_dogfood(ts,a):
         if payload is None: out.append(Outcome(t.display(),"unavailable","dogfood evidence unavailable",(finding(t,"dogfood-check-unavailable","warn","Pages/browser and local coding-tooling evidence unavailable"),))); continue
         artifact=None
         if not a.no_save:
-            artifact=t.path/".artifacts"/"repo-ops"/"dogfood"/f"{head(t.path) or 'unknown'}.json"; write_json(artifact,{"source":source,"repository":t.slug,"headSha":head(t.path),"operation":a.operation,"evidence":payload})
+            ensure_ignored(t.path,".artifacts"); artifact=t.path/".artifacts"/"repo-ops"/"dogfood"/f"{sha or 'unknown'}.json"; write_json(artifact,{"source":source,"repository":t.slug,"headSha":sha,"operation":a.operation,"evidence":payload})
         out.append(Outcome(t.display(),str(payload.get("status","passed")) if isinstance(payload,dict) else "passed",f"dogfood evidence from {source}",data={"artifact":str(artifact) if artifact else None,"evidence":payload,"notes":notes}))
     return out
 
 def changed_paths(repo: Path,base=None):
     r=git(repo,"merge-base","HEAD",base or "origin/HEAD")
+    if r.returncode and base: raise ValueError(f"cannot resolve requested base {base!r}: {r.stderr.strip()}")
     if r.returncode: r=git(repo,"rev-parse","HEAD~1")
     if r.returncode: return []
     d=git(repo,"diff","--name-only",f"{r.stdout.strip()}...HEAD"); return sorted(x for x in d.stdout.splitlines() if x)
@@ -85,7 +96,9 @@ def capabilities(paths):
 def cmd_changed(ts,a):
     out=[]
     for t in ts:
-        paths=changed_paths(t.path,a.base); data={"changedPaths":paths,"capabilities":capabilities(paths)}; ct=coding_tooling(t.path,["affected",*(["--base",a.base] if a.base else []),"--json"])
+        try: paths=changed_paths(t.path,a.base)
+        except ValueError as e: out.append(Outcome(t.display(),"error","requested base could not be resolved",(finding(t,"changed-base-invalid","error",str(e)),))); continue
+        data={"changedPaths":paths,"capabilities":capabilities(paths)}; ct=coding_tooling(t.path,["affected",*(["--base",a.base] if a.base else []),"--json"])
         if ct:
             r=run(ct,cwd=t.path,timeout=90)
             if not r.returncode:

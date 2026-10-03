@@ -118,7 +118,7 @@ def discover(start: Path, scope="auto", include: Sequence[str]=(), exclude: Sequ
 
 def default_branch(repo: Path) -> str:
     r = git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")
-    if r.returncode == 0 and r.stdout.strip().startswith("refs/remotes/origin/"): return r.stdout.strip().split("/")[-1]
+    if r.returncode == 0 and r.stdout.strip().startswith("refs/remotes/origin/"): return r.stdout.strip().removeprefix("refs/remotes/origin/")
     for name in ("main", "master"):
         if git(repo, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{name}").returncode == 0: return name
     return branch(repo) or "main"
@@ -131,6 +131,18 @@ def load_json(path: Path, default=None):
     try: return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError): return default
 
+def ensure_ignored(repo: Path, rel: str) -> None:
+    """Keep generated evidence under ``rel`` out of ``git status`` without editing tracked files."""
+    probe = f"{rel.rstrip('/')}/.repo-ops-probe"
+    if git(repo, "check-ignore", "-q", "--no-index", probe).returncode == 0: return
+    r = git(repo, "rev-parse", "--git-path", "info/exclude")
+    if r.returncode or not r.stdout.strip(): return
+    exclude = Path(r.stdout.strip())
+    if not exclude.is_absolute(): exclude = repo / exclude
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    entry = f"/{rel.strip('/')}/"
+    if entry not in text.splitlines(): exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + entry + "\n", encoding="utf-8")
 def write_json(path: Path, value: Any): path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(value, indent=2, sort_keys=True)+"\n", encoding="utf-8")
 def finding(t: Target, code: str, severity: str, message: str, **kw): return Finding(t.display(), code, severity, message, **kw)
 def executable(name: str) -> bool: return shutil.which(name) is not None

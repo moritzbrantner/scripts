@@ -56,6 +56,24 @@ class Safety(unittest.TestCase):
             out=r.cmd_clean([r.Target(p,"a")],A())[0];self.assertIn("dist",out.data["candidates"]);self.assertIn("build",out.data["skipped"])
             A.apply=True;r.cmd_clean([r.Target(p,"a")],A());self.assertFalse((p/"dist").exists());self.assertTrue((p/"build").exists())
 
+class Findings(unittest.TestCase):
+    def test_slash_default_branch(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");run("git","update-ref","refs/remotes/origin/release/stable","HEAD",cwd=p);run("git","symbolic-ref","refs/remotes/origin/HEAD","refs/remotes/origin/release/stable",cwd=p)
+            self.assertEqual(r.default_branch(p),"release/stable")
+    def test_invalid_explicit_base_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a")
+            with self.assertRaises(ValueError): r.changed_paths(p,"origin/typo")
+            class A:base="origin/typo"
+            self.assertEqual(r.cmd_changed([r.Target(p,"a")],A())[0].status,"error")
+    def test_evidence_does_not_dirty_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");r.ensure_ignored(p,".artifacts");r.write_json(p/".artifacts/repo-ops/x.json",{});self.assertTrue(r.clean(p))
+            r.ensure_ignored(p,".artifacts");self.assertEqual((p/".git/info/exclude").read_text().count("/.artifacts/"),1)
+    def test_remote_sha_required(self):
+        self.assertIsNone(r.remote_sha({"status":"passed"}));self.assertEqual(r.remote_sha({"headSha":"a"*40}),"a"*40)
+
 class Acceptance(unittest.TestCase):
     def test_missing_checks_fail_closed(self):
         t=r.Target(Path("/tmp/x"),"x","o/x");p={"number":1,"isDraft":False,"headRefOid":"a"*40,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","unresolved":0,"checks":[]};self.assertIn("required-check-evidence-empty",{x.code for x in r.pr_blockers(t,p)})

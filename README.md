@@ -114,13 +114,13 @@ Examples:
 
 `dogfood-check` keeps `scripts` as orchestration rather than duplicating deterministic analyzers. For a public GitHub repository it first tries the `coding-tooling` GitHub Pages `run.json` surface through an installed headless Chromium-compatible browser. If browser execution is unavailable, it falls back to the local `coding-tooling` CLI/sibling checkout.
 
-Evidence is stamped with the target repository's exact `HEAD` and written under `.artifacts/repo-ops/dogfood/`, which is ignored by Git. The local CLI remains authoritative for operations that need repository execution or mutation.
+Pages evidence is requested for the target repository's exact `HEAD` and is only accepted when it reports that same SHA; otherwise the local fallback is used. Evidence is written under `.artifacts/repo-ops/dogfood/`, which is ignored by Git. The local CLI remains authoritative for operations that need repository execution or mutation.
 
 ### Mutation boundaries
 
 `repo-bootstrap`, `issue-from-finding`, `workspace-clean`, `sync-default-branches`, `batch-pr`, and `merge-green` require `--apply` before their corresponding mutation occurs. `batch-pr` refuses dirty repositories. `workspace-clean` refuses any directory that `git check-ignore` does not confirm as ignored. `sync-default-branches` refuses dirty, non-default, ahead, or diverged worktrees. `merge-green` supplies the observed PR head SHA to GitHub's merge API, so a moved head cannot be merged on stale evidence.
 
-`release-evidence` and `dogfood-check` write generated evidence under `.artifacts/`; they do not modify authored source.
+`release-evidence` and `dogfood-check` write generated evidence under `.artifacts/`; they do not modify authored source. When a target does not already ignore `.artifacts/`, it is added to that repository's local `.git/info/exclude` so evidence never dirties the worktree.
 
 ## Sync GitHub repositories
 
@@ -143,10 +143,35 @@ Existing matching Git repositories are left untouched. With `--fetch`, only remo
 
 The script looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then an existing `gh auth` login. Without authentication, discovery falls back to GitHub's public repository API.
 
+## Inventory workspace environments
+
+`workspace_environment_inventory.py` gives a read-only fleet view of the toolchain and environment state declared by sibling repositories. It treats ecosystem-native files such as `package.json#packageManager`, `rust-toolchain.toml`, `global.json`, `.node-version`, `.nvmrc`, and `.python-version` as version declarations, and reads environment-v1 compatibility holds from `.repository-environment.toml`.
+
+```bash
+python workspace_environment_inventory.py
+python workspace_environment_inventory.py --json
+```
+
+The report groups accepted versions across the workspace and flags exact accepted versions repeated in execution/setup files such as GitHub Actions workflows, repository scripts, dev-container files, and Dockerfiles. Repeated documentation text is retained in JSON for investigation but is not presented as a cleanup candidate by default.
+
+To compare the workspace with installed local tooling without changing anything:
+
+```bash
+python workspace_environment_inventory.py --local
+```
+
+`--local` reports the current Bun binary, installed exact rustup toolchains, and exact Rust toolchains that no scanned repository references. The command never uninstalls a toolchain, changes a repository pin, removes a cache, or rewrites a file.
+
+The default workspace is the parent of this repository. Override it when needed:
+
+```bash
+python workspace_environment_inventory.py --root ~/dev
+```
+
 ## Validation
 
 ```bash
-python -m compileall sync_github_repos.py repo_ops.py repo_ops_base.py repo_ops_checks.py repo_ops_analysis.py repo_ops_remote.py repo_ops_mutation.py tests
+python -m compileall sync_github_repos.py workspace_environment_inventory.py repo_ops.py repo_ops_base.py repo_ops_checks.py repo_ops_analysis.py repo_ops_remote.py repo_ops_mutation.py tests
 python -m unittest discover -s tests -v
 bin/repo-ops --help
 bin/fleet-status --help
