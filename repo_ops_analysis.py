@@ -88,6 +88,8 @@ def capabilities(paths):
         q=p.lower()
         if q.startswith(".github/workflows/"): c|={"workflow-validation","repo-health"}
         if q.endswith((".ts",".tsx",".js",".jsx")): c|={"lint","typecheck","test"}
+        if q.rsplit("/",1)[-1] in {"package.json","package-lock.json","npm-shrinkwrap.json","pnpm-lock.yaml","pnpm-workspace.yaml","yarn.lock","bun.lock","bun.lockb"}: c|={"lint","typecheck","test","build"}
+        if q.rsplit("/",1)[-1] in {"pyproject.toml","setup.py","setup.cfg","uv.lock","poetry.lock"} or re.fullmatch(r"requirements[^/]*\.txt",q.rsplit("/",1)[-1]): c|={"python:compile","test"}
         if q.endswith(".rs") or q.endswith(("cargo.toml","cargo.lock")): c|={"format:check","lint","test"}
         if q.endswith((".cs",".csproj",".sln")): c|={"build","test"}
         if q.endswith((".py",".pyi")): c|={"python:compile","test"}

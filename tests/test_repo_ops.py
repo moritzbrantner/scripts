@@ -71,6 +71,15 @@ class Findings(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p=make_repo(Path(d),"a");r.ensure_ignored(p,".artifacts");r.write_json(p/".artifacts/repo-ops/x.json",{});self.assertTrue(r.clean(p))
             r.ensure_ignored(p,".artifacts");self.assertEqual((p/".git/info/exclude").read_text().count("/.artifacts/"),1)
+    def test_timeout_bytes_decoded(self):
+        res=r.run(["python3","-c","import sys,time; sys.stderr.write('x'); sys.stderr.flush(); time.sleep(5)"],timeout=1);self.assertEqual(res.returncode,124);self.assertIsInstance(res.stderr,str)
+    def test_manifest_capabilities(self):
+        self.assertIn("test",r.capabilities(["pnpm-lock.yaml"]));self.assertIn("build",r.capabilities(["apps/web/package.json"]));self.assertIn("python:compile",r.capabilities(["requirements-dev.txt"]))
+    def test_clean_symlinked_dir(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ext:
+            root=Path(d);p=make_repo(root,"a");(p/".gitignore").write_text("dist\n");run("git","add",".gitignore",cwd=p);run("git","commit","-m","ignore",cwd=p);(Path(ext)/"keep").write_text("x");(p/"dist").symlink_to(ext,target_is_directory=True)
+            class A:apply=True;candidate=["dist"]
+            out=r.cmd_clean([r.Target(p,"a")],A())[0];self.assertEqual(out.data["candidates"],["dist"]);self.assertFalse((p/"dist").exists());self.assertTrue((Path(ext)/"keep").exists())
     def test_remote_sha_required(self):
         self.assertIsNone(r.remote_sha({"status":"passed"}));self.assertEqual(r.remote_sha({"headSha":"a"*40}),"a"*40)
 

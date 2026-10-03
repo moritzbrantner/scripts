@@ -9,10 +9,10 @@ def cmd_clean(ts,a):
         removable=[]; skipped=[]
         for name in candidates:
             for p in sorted(t.path.glob(f"**/{name}")):
-                if not p.is_dir() or ".git" in p.parts: continue
+                if not p.is_dir() or ".git" in p.parts or any((t.path/x).is_symlink() for x in p.relative_to(t.path).parents if x!=Path(".")): continue
                 if git(t.path,"check-ignore","-q",str(p)).returncode: skipped.append(str(p.relative_to(t.path))); continue
                 removable.append(str(p.relative_to(t.path)))
-                if a.apply: shutil.rmtree(p)
+                if a.apply: p.unlink() if p.is_symlink() else shutil.rmtree(p)
         out.append(Outcome(t.display(),"changed" if a.apply and removable else "planned" if removable else "clean",f"{'removed' if a.apply else 'would remove'} {len(set(removable))} ignored build/cache directorie(s)",data={"candidates":sorted(set(removable)),"skipped":sorted(set(skipped)),"apply":a.apply}))
     return out
 

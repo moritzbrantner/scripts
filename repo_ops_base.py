@@ -74,7 +74,8 @@ def run(argv: Sequence[str], cwd: Path | None = None, timeout: int = TIMEOUT) ->
     except FileNotFoundError as e:
         return subprocess.CompletedProcess(list(argv), 127, "", str(e))
     except subprocess.TimeoutExpired as e:
-        return subprocess.CompletedProcess(list(argv), 124, e.stdout or "", (e.stderr or "") + f"\ntimeout after {timeout}s")
+        def text(v): return v.decode("utf-8", "replace") if isinstance(v, bytes) else (v or "")
+        return subprocess.CompletedProcess(list(argv), 124, text(e.stdout), text(e.stderr) + f"\ntimeout after {timeout}s")
 
 
 def git(repo: Path, *args: str, timeout: int = 30): return run(["git", "-C", str(repo), *args], timeout=timeout)
