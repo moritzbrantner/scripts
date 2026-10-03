@@ -1,0 +1,120 @@
+from __future__ import annotations
+import json, subprocess, tempfile, unittest
+from pathlib import Path
+import repo_ops as r
+
+def run(*args,cwd): subprocess.run(args,cwd=cwd,check=True,capture_output=True,text=True)
+def make_repo(root,name,remote=None):
+    p=root/name;p.mkdir();run("git","init","-b","main",cwd=p);run("git","config","user.email","t@example.com",cwd=p);run("git","config","user.name","T",cwd=p);(p/"README.md").write_text("x\n");run("git","add",".",cwd=p);run("git","commit","-m","init",cwd=p)
+    if remote:run("git","remote","add","origin",remote,cwd=p)
+    return p
+
+class Discovery(unittest.TestCase):
+    def test_slug(self):
+        self.assertEqual(r.slug_from_remote("git@github.com:moritzbrantner/scripts.git"),"moritzbrantner/scripts")
+        self.assertEqual(r.slug_from_remote("https://github.com/moritzbrantner/scripts.git"),"moritzbrantner/scripts")
+    def test_auto_single_and_fleet(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a","https://github.com/moritzbrantner/a.git");b=make_repo(root,"b")
+            self.assertEqual([x.name for x in r.discover(a/"src" if (a/"src").mkdir() is None else a)], ["a"])
+            self.assertEqual([x.name for x in r.discover(root)], ["a","b"])
+    def test_filters(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);make_repo(root,"lab-a");make_repo(root,"lab-b");make_repo(root,"app")
+            self.assertEqual([x.name for x in r.discover(root,include=["lab-*"],exclude=["*-b"])],["lab-a"])
+
+class Analysis(unittest.TestCase):
+    def test_workflow_pin(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);w=p/".github/workflows";w.mkdir(parents=True);(w/"ci.yml").write_text("steps:\n- uses: actions/checkout@v4\n- uses: x/y@0123456789012345678901234567890123456789\n")
+            self.assertEqual(len(r.workflow_findings(p)),1)
+    def test_dependency_drift(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a");b=make_repo(root,"b");(a/"package.json").write_text(json.dumps({"dependencies":{"react":"1"}}));(b/"package.json").write_text(json.dumps({"dependencies":{"react":"2"}}))
+            out=r.cmd_dependency_sync([r.Target(a,"a"),r.Target(b,"b")],None)[0]
+            self.assertEqual(out.status,"attention");self.assertIn("npm:react",out.data["drift"])
+    def test_duplicates(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a");b=make_repo(root,"b");src="def f(x):\n    y=x.strip()\n    y=y.casefold()\n    y=y.replace('-', '_')\n    return y\n";(a/"a.py").write_text(src);(b/"b.py").write_text(src)
+            self.assertEqual(len(r.duplicate_groups([r.Target(a,"a"),r.Target(b,"b")])),1)
+    def test_graph_path_edge(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a");b=make_repo(root,"b");(a/"package.json").write_text(json.dumps({"dependencies":{"b":"file:../b"}}));g=r.graph_data([r.Target(a,"a"),r.Target(b,"b")]);self.assertIn({"from":"a","to":"b","kind":"npm:dependencies:path"},g["edges"])
+
+class Safety(unittest.TestCase):
+    def test_bootstrap_dry_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);p=make_repo(root,"a");t=r.Target(p,"a")
+            class A:apply=False
+            self.assertEqual(r.cmd_repo_bootstrap([t],A())[0].status,"planned");self.assertFalse((p/"renovate.json").exists())
+            A.apply=True;r.cmd_repo_bootstrap([t],A());self.assertTrue((p/"renovate.json").exists())
+            (p/".editorconfig").write_text("custom\n");r.cmd_repo_bootstrap([t],A());self.assertEqual((p/".editorconfig").read_text(),"custom\n")
+    def test_clean_ignored_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);p=make_repo(root,"a");(p/".gitignore").write_text("dist/\n");run("git","add",".gitignore",cwd=p);run("git","commit","-m","ignore",cwd=p);(p/"dist").mkdir();(p/"dist/x").write_text("x");(p/"build").mkdir();(p/"build/x").write_text("x")
+            class A:apply=False;candidate=[]
+            out=r.cmd_clean([r.Target(p,"a")],A())[0];self.assertIn("dist",out.data["candidates"]);self.assertIn("build",out.data["skipped"])
+            A.apply=True;r.cmd_clean([r.Target(p,"a")],A());self.assertFalse((p/"dist").exists());self.assertTrue((p/"build").exists())
+
+class Findings(unittest.TestCase):
+    def test_slash_default_branch(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");run("git","update-ref","refs/remotes/origin/release/stable","HEAD",cwd=p);run("git","symbolic-ref","refs/remotes/origin/HEAD","refs/remotes/origin/release/stable",cwd=p)
+            self.assertEqual(r.default_branch(p),"release/stable")
+    def test_invalid_explicit_base_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a")
+            with self.assertRaises(ValueError): r.changed_paths(p,"origin/typo")
+            class A:base="origin/typo"
+            self.assertEqual(r.cmd_changed([r.Target(p,"a")],A())[0].status,"error")
+    def test_evidence_does_not_dirty_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");r.ensure_ignored(p,".artifacts");r.write_json(p/".artifacts/repo-ops/x.json",{});self.assertTrue(r.clean(p))
+            r.ensure_ignored(p,".artifacts");self.assertEqual((p/".git/info/exclude").read_text().count("/.artifacts/"),1)
+    def test_timeout_bytes_decoded(self):
+        res=r.run(["python3","-c","import sys,time; sys.stderr.write('x'); sys.stderr.flush(); time.sleep(5)"],timeout=1);self.assertEqual(res.returncode,124);self.assertIsInstance(res.stderr,str)
+    def test_manifest_capabilities(self):
+        self.assertIn("test",r.capabilities(["pnpm-lock.yaml"]));self.assertIn("build",r.capabilities(["apps/web/package.json"]));self.assertIn("python:compile",r.capabilities(["requirements-dev.txt"]))
+    def test_clean_symlinked_dir(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as ext:
+            root=Path(d);p=make_repo(root,"a");(p/".gitignore").write_text("dist\n");run("git","add",".gitignore",cwd=p);run("git","commit","-m","ignore",cwd=p);(Path(ext)/"keep").write_text("x");(p/"dist").symlink_to(ext,target_is_directory=True)
+            class A:apply=True;candidate=["dist"]
+            out=r.cmd_clean([r.Target(p,"a")],A())[0];self.assertEqual(out.data["candidates"],["dist"]);self.assertFalse((p/"dist").exists());self.assertTrue((Path(ext)/"keep").exists())
+    def test_graph_declared_package_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);a=make_repo(root,"a");b=make_repo(root,"widget-repo");c=make_repo(root,"react")
+            (b/"package.json").write_text(json.dumps({"name":"@org/widget"}));(c/"package.json").write_text(json.dumps({"name":"my-react-fork"}));(a/"package.json").write_text(json.dumps({"dependencies":{"@org/widget":"1","react":"18"}}))
+            g=r.graph_data([r.Target(a,"a"),r.Target(b,"widget-repo"),r.Target(c,"react")]);self.assertEqual(g["edges"],[{"from":"a","to":"widget-repo","kind":"npm:dependencies"}])
+    def test_changed_uses_default_branch_without_origin_head(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=make_repo(Path(d),"a");run("git","update-ref","refs/remotes/origin/main","HEAD",cwd=p)
+            for n in ("x.py","y.ts"):(p/n).write_text("x\n");run("git","add",n,cwd=p);run("git","commit","-m",n,cwd=p)
+            self.assertEqual(r.changed_paths(p),["x.py","y.ts"])
+    def test_batch_resumes_remote_branch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);bare=root/"remote.git";run("git","init","--bare","-b","main",str(bare),cwd=root);p=make_repo(root,"a",str(bare));run("git","push","-u","origin","main",cwd=p)
+            run("git","switch","-c","ops",cwd=p);(p/"done").write_text("x\n");run("git","add","done",cwd=p);run("git","commit","-m","ops",cwd=p);run("git","push","origin","ops",cwd=p);run("git","switch","main",cwd=p);run("git","branch","-D","ops",cwd=p)
+            calls=[];orig=r.gh,r.gh_json
+            r.gh_json=lambda t,args,timeout=60:[];r.gh=lambda t,args,timeout=60:(calls.append(args),subprocess.CompletedProcess(args,0,"https://example/pr/1\n",""))[1]
+            try:
+                class A:apply=True;run="true";branch="ops";title="ops";body="b";timeout=30
+                out=r.cmd_batch([r.Target(p,"a","o/a")],A())[0]
+            finally: r.gh,r.gh_json=orig
+            self.assertEqual(out.status,"changed",out.dict());self.assertTrue(out.data["resumed"]);self.assertEqual(calls[0][:2],["pr","create"]);self.assertEqual(r.branch(p),"main")
+    def test_remote_sha_required(self):
+        self.assertIsNone(r.remote_sha({"status":"passed"}));self.assertEqual(r.remote_sha({"headSha":"a"*40}),"a"*40)
+
+class Acceptance(unittest.TestCase):
+    def test_missing_checks_fail_closed(self):
+        t=r.Target(Path("/tmp/x"),"x","o/x");p={"number":1,"isDraft":False,"headRefOid":"a"*40,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","unresolved":0,"checks":[]};self.assertIn("required-check-evidence-empty",{x.code for x in r.pr_blockers(t,p)})
+    def test_clean_state(self):
+        t=r.Target(Path("/tmp/x"),"x","o/x");p={"number":1,"isDraft":False,"headRefOid":"a"*40,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","unresolved":0,"checks":[{"name":"Validate","state":"SUCCESS","bucket":"pass"}]};self.assertEqual(r.pr_blockers(t,p),[])
+
+class Cli(unittest.TestCase):
+    def test_all_commands_unique(self): self.assertEqual(len(r.COMMANDS),33);self.assertEqual(len(set(r.COMMANDS)),33)
+    def test_requested_commands_present(self):
+        requested={"repo-health","pr-accept","pr-stack-status","fleet-status","repo-bootstrap","repo-drift","workflow-pin","dependency-sync","duplicate-code-scan","extract-candidate","pages-smoke","pages-inventory","dogfood-check","changed-only","ci-reproduce","toolchain-fingerprint","rust-workspace-audit","ts-workspace-audit","expo-readiness","dotnet-api-audit","roadmap-next","stale-work","issue-from-finding","release-evidence","repo-graph","ownership-check","workspace-clean","batch-pr","merge-green"};self.assertTrue(requested.issubset(set(r.COMMANDS)))
+    def test_aliases(self):
+        root=Path(__file__).resolve().parents[1];self.assertTrue(all((root/"bin"/x).is_file() for x in r.COMMANDS))
+
+if __name__=="__main__":unittest.main()
